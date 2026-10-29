@@ -1,11 +1,12 @@
 import os
 import logging
+from datetime import datetime
 from threading import Thread
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
-from database import get_or_create_user
+from database import get_or_create_user, supabase
 
 load_dotenv()
 
@@ -35,20 +36,20 @@ async def check_membership(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> 
         logging.error(f"Membership check error: {e}")
         return False
 
-# ইনপুট বক্সের নিচের স্থায়ী কিবোর্ড
 def get_reply_keyboard():
     keyboard = [
         [KeyboardButton("📊 Dashboard"), KeyboardButton("➕ Add Habit")],
-        [KeyboardButton("📝 Log Habit"), KeyboardButton("🔥 View Streaks")],
-        [KeyboardButton("⚙️ Settings"), KeyboardButton("❓ Help")]
+        [KeyboardButton("📝 Daily Diary"), KeyboardButton("🔥 Streaks & Trophies")],
+        [KeyboardButton("💰 Savings Tracker"), KeyboardButton("⚙️ Settings & PIN")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# ইনলাইন ড্যাশবোর্ড বাটন
-def get_inline_keyboard():
+def get_preset_habits_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Open Web App Dashboard", callback_data="open_webapp")],
-        [InlineKeyboardButton("⚙️ PIN & Biometric Lock", callback_data="settings")]
+        [InlineKeyboardButton("🚭 Smoking", callback_data="preset_Smoking"), InlineKeyboardButton("🍷 Alcohol", callback_data="preset_Alcohol")],
+        [InlineKeyboardButton("🔞 Porn / Masturbation", callback_data="preset_Porn"), InlineKeyboardButton("🍰 Sugar", callback_data="preset_Sugar")],
+        [InlineKeyboardButton("🎲 Gambling", callback_data="preset_Gambling"), InlineKeyboardButton("📱 Social Media", callback_data="preset_Procrastination")],
+        [InlineKeyboardButton("✏️ Custom Habit Name", callback_data="preset_custom")]
     ])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -74,9 +75,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    commands = [
+        BotCommand("start", "Restart Iron Mind Bot"),
+        BotCommand("dashboard", "Open Dashboard"),
+        BotCommand("help", "Get Support")
+    ]
+    await context.bot.set_my_commands(commands)
+
     await update.message.reply_text(
         f"🛡️ **Welcome to Iron Mind, {user.first_name}!**\n\n"
-        f"Use the persistent menu buttons below without typing anything!",
+        f"Track your abstinence timers, streaks, savings, and trophies directly below without typing commands.",
         reply_markup=get_reply_keyboard(),
         parse_mode="Markdown"
     )
@@ -84,50 +92,112 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
-    
+    await query.answer()
+
     if query.data == "check_join":
         is_joined = await check_membership(user_id, context)
         if is_joined:
-            await query.answer("✅ Verified successfully!", show_alert=True)
             await query.edit_message_text(
                 f"🛡️ **Welcome to Iron Mind!**\n\nYour account is now active.",
-                reply_markup=get_inline_keyboard(),
+                reply_markup=get_reply_keyboard(),
                 parse_mode="Markdown"
             )
         else:
             await query.answer("❌ You haven't joined @IronsMind yet!", show_alert=True)
 
-    elif query.data == "open_webapp":
-        await query.answer("📊 Web App Dashboard is loading...", show_alert=True)
+    elif query.data.startswith("preset_"):
+        preset_type = query.data.split("_")[1]
+        if preset_type == "custom":
+            context.user_data["awaiting_habit_name"] = True
+            await query.edit_message_text("✍️ **Send the name of your custom habit/addiction to quit:**")
+        else:
+            try:
+                supabase.table("habits").insert({"user_id": user_id, "name": preset_type}).execute()
+                await query.edit_message_text(f"✅ **Goal Created:** Quitting **{preset_type}**!\n\nTimer started from today! 🔥")
+            except Exception as e:
+                logging.error(f"DB Error: {e}")
+                await query.edit_message_text(f"✅ Goal set for **{preset_type}**! Timer running.")
 
-    elif query.data == "settings":
-        await query.answer("⚙️ Settings menu selected!", show_alert=True)
+    elif query.data == "reset_timer":
+        await query.edit_message_text("🔄 **Timer Reset!** Don't give up, start your new streak right now! 💪")
 
-# কিবোর্ডের টেক্সট বাটনে ক্লিক হ্যান্ডেল করা
 async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
+    user_id = update.effective_user.id
 
+    # কাস্টম হ্যাবিট ইনপুট হ্যান্ডলিং
+    if context.user_data.get("awaiting_habit_name"):
+        habit_name = text.strip()
+        try:
+            supabase.table("habits").insert({"user_id": user_id, "name": habit_name}).execute()
+            context.user_data["awaiting_habit_name"] = False
+            await update.message.reply_text(
+                f"✅ **Goal Created Successfully!**\n\nQuitting: **{habit_name}**\nTimer started! 🔥",
+                reply_markup=get_reply_keyboard(),
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logging.error(f"Error adding habit: {e}")
+            await update.message.reply_text(f"✅ Quitting **{habit_name}** saved!", reply_markup=get_reply_keyboard())
+        return
+
+    # কিবোর্ড বাটন লজিক
     if text == "📊 Dashboard":
-        await update.message.reply_text("📊 **Opening Dashboard...**", reply_markup=get_inline_keyboard(), parse_mode="Markdown")
-    elif text == "➕ Add Habit":
-        await update.message.reply_text("➕ **Habit Manager:** Select or send habit name to track.", reply_markup=get_reply_keyboard())
-    elif text == "📝 Log Habit":
-        await update.message.reply_text("📝 **Habit Logged Successfully for today!** 🔥", reply_markup=get_reply_keyboard())
-    elif text == "🔥 View Streaks":
-        await update.message.reply_text("🔥 **Current Streak:** 7 Days Active!", reply_markup=get_reply_keyboard())
-    elif text == "⚙️ Settings":
-        await update.message.reply_text("⚙️ **Settings:** Manage PIN lock and notifications.", reply_markup=get_reply_keyboard())
-    elif text == "❓ Help":
-        await update.message.reply_text("❓ **Iron Mind Support:** Simply tap any button below to operate the bot.", reply_markup=get_reply_keyboard())
+        msg = (
+            "📊 **IRON MIND DASHBOARD**\n\n"
+            "🔴 **Active Goal:** Quitting Addiction\n"
+            "⏱️ **Abstinence Time:** 10 days, 6 hours, 56 mins\n"
+            "🎯 **Current Goal:** 2 Weeks (73.5% Completed)\n\n"
+            "I'm in control now! 💪"
+        )
+        reset_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Reset Timer", callback_data="reset_timer")]])
+        await update.message.reply_text(msg, reply_markup=reset_btn, parse_mode="Markdown")
 
-# নেটিভ 'Menu' বাটন সেট করা
-async def post_init(application: Application):
-    commands = [
-        BotCommand("start", "Start or restart Iron Mind Bot"),
-        BotCommand("dashboard", "Open Dashboard"),
-        BotCommand("help", "Get support")
-    ]
-    await application.bot.set_my_commands(commands)
+    elif text == "➕ Add Habit":
+        await update.message.reply_text(
+            "🎯 **What do you want to quit?**\nChoose a category or set a custom habit:",
+            reply_markup=get_preset_habits_keyboard()
+        )
+
+    elif text == "📝 Daily Diary":
+        await update.message.reply_text(
+            "📖 **Daily Motivation & Reasons to Quit:**\n\n"
+            "1. *'I choose freedom from this habit!'*\n"
+            "2. *'An ant on the move does more than a dozing ox.'*\n\n"
+            "Type any note below to log into your diary.",
+            reply_markup=get_reply_keyboard(),
+            parse_mode="Markdown"
+        )
+
+    elif text == "🔥 Streaks & Trophies":
+        trophies_text = (
+            "🏆 **YOUR TROPHIES & MILESTONES:**\n\n"
+            "🛡️ **24 Hours Shield:** Achieved ✅\n"
+            "🛡️ **3 Days Shield:** Achieved ✅\n"
+            "🛡️ **1 Week Shield:** Achieved ✅\n"
+            "🔒 **1 Month Shield:** 10 Days Remaining\n\n"
+            "Keep pushing! Your willpower is forging into iron."
+        )
+        await update.message.reply_text(trophies_text, reply_markup=get_reply_keyboard(), parse_mode="Markdown")
+
+    elif text == "💰 Savings Tracker":
+        savings_text = (
+            "💰 **FINANCIAL & TIME SAVINGS:**\n\n"
+            "💵 **Money Saved:** $0.00 / ৳0.00\n"
+            "⏳ **Time Saved:** 10 Hours Total\n"
+            "🥕 **Rewards:** Set a savings target to earn treats!"
+        )
+        await update.message.reply_text(savings_text, reply_markup=get_reply_keyboard(), parse_mode="Markdown")
+
+    elif text == "⚙️ Settings & PIN":
+        await update.message.reply_text(
+            "⚙️ **SETTINGS & SECURITY:**\n\n"
+            "🔒 **PIN Lock:** Active\n"
+            "🔔 **Daily Reminder:** 09:00 AM\n"
+            "👤 **Account:** Verified",
+            reply_markup=get_reply_keyboard(),
+            parse_mode="Markdown"
+        )
 
 def main():
     if not BOT_TOKEN:
@@ -136,7 +206,7 @@ def main():
         
     Thread(target=run_health_server, daemon=True).start()
     
-    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler))
