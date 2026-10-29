@@ -2,7 +2,7 @@ import os
 import logging
 from threading import Thread
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from dotenv import load_dotenv
 from database import get_or_create_user
@@ -11,6 +11,8 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 REQUIRED_CHANNEL = os.getenv("REQUIRED_CHANNEL", "@IronsMind")
+# ড্যাশবোর্ডের জন্য ওয়েbaseURL (পরবর্তীতে আপনার ওয়েবসাইট লিঙ্ক বসাতে পারবেন)
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://irons-mind-bot.onrender.com")
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -60,7 +62,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyboard = [
-        [InlineKeyboardButton("📊 Open Web App Dashboard", callback_data="open_webapp")],
+        [InlineKeyboardButton("📊 Open Web App Dashboard", web_app=WebAppInfo(url=WEBAPP_URL))],
         [InlineKeyboardButton("⚙️ Settings & PIN", callback_data="settings")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -68,7 +70,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🛡️ **Welcome to Iron Mind, {user.first_name}!**\n\n"
         f"Your private habit and streak tracker is ready.\n"
-        f"Use the dashboard to track your habits and build willpower securely.",
+        f"Use the dashboard button below to open your habit tracker.",
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
@@ -83,7 +85,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if is_joined:
             await query.answer("✅ Verified successfully!", show_alert=True)
             keyboard = [
-                [InlineKeyboardButton("📊 Open Web App Dashboard", callback_data="open_webapp")],
+                [InlineKeyboardButton("📊 Open Web App Dashboard", web_app=WebAppInfo(url=WEBAPP_URL))],
                 [InlineKeyboardButton("⚙️ Settings & PIN", callback_data="settings")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -93,7 +95,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown"
             )
         else:
-            await query.answer("❌ You haven't joined @IronsMind yet! Please join first.", show_alert=True)
+            await query.answer("❌ You haven't joined @IronsMind yet!", show_alert=True)
+
+    elif query.data == "settings":
+        await query.answer("⚙️ Settings menu coming soon!", show_alert=True)
 
 def main():
     if not BOT_TOKEN:
