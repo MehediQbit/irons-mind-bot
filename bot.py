@@ -75,7 +75,7 @@ def get_habit(user_id):
         logging.error(f"DB Read Error: {e}")
         return None
 
-# --- Main Feature Functions ---
+# --- Main Features ---
 async def show_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     habit = get_habit(user_id)
@@ -307,7 +307,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
     
     onboarding_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^➕ New Habit Goal$"), start_onboarding)],
+        entry_points=[MessageHandler(filters.Regex("^➕ New Habit Goal$"), start_new_habit)],
         states={
             HABIT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(MENU_REGEX), habit_name_received)],
             QUIT_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(MENU_REGEX), quit_date_received)],
