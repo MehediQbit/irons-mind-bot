@@ -16,7 +16,6 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
-# Render-এর পোর্টের জন্য ডামি ওয়েব সার্ভার
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -28,14 +27,12 @@ def run_health_server():
     server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
     server.serve_forever()
 
-# চ্যানেল মেম্বারশিপ যাচাই
 async def check_membership(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     try:
         member = await context.bot.get_chat_member(chat_id=REQUIRED_CHANNEL, user_id=user_id)
-        if member.status in ["creator", "administrator", "member"]:
-            return True
-        return False
-    except Exception:
+        return member.status in ["creator", "administrator", "member"]
+    except Exception as e:
+        logging.error(f"Membership check error: {e}")
         return False
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -78,24 +75,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
     
     if query.data == "check_join":
-        is_joined = await check_membership(query.from_user.id, context)
+        user_id = query.from_user.id
+        is_joined = await check_membership(user_id, context)
+        
         if is_joined:
+            await query.answer("✅ Verified successfully!", show_alert=True)
+            keyboard = [
+                [InlineKeyboardButton("📊 Open Web App Dashboard", callback_data="open_webapp")],
+                [InlineKeyboardButton("⚙️ Settings & PIN", callback_data="settings")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text(
-                "✅ **Verification Successful!**\n\nSend /start to open your Iron Mind dashboard.",
+                f"🛡️ **Welcome to Iron Mind!**\n\nYour account is now active and verified.",
+                reply_markup=reply_markup,
                 parse_mode="Markdown"
             )
         else:
-            await query.answer("❌ You haven't joined @IronsMind yet!", show_alert=True)
+            await query.answer("❌ You haven't joined @IronsMind yet! Please join first.", show_alert=True)
 
 def main():
     if not BOT_TOKEN:
-        print("Error: BOT_TOKEN environment variable is missing!")
+        print("Error: BOT_TOKEN is missing!")
         return
         
-    # ডামি সার্ভার থ্রেড চালু করা
     Thread(target=run_health_server, daemon=True).start()
     
     app = Application.builder().token(BOT_TOKEN).build()
