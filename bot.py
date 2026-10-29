@@ -1,5 +1,7 @@
 import os
 import logging
+from threading import Thread
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from dotenv import load_dotenv
@@ -14,8 +16,20 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
+# Render-এর পোর্টের জন্য ডামি ওয়েব সার্ভার
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Iron Mind Bot is Running Live!")
+
+def run_health_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    server.serve_forever()
+
+# চ্যানেল মেম্বারশিপ যাচাই
 async def check_membership(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """ইউজার বাধ্যতামূলক চ্যানেলে সদস্য কি না তা যাচাই করে।"""
     try:
         member = await context.bot.get_chat_member(chat_id=REQUIRED_CHANNEL, user_id=user_id)
         if member.status in ["creator", "administrator", "member"]:
@@ -25,14 +39,10 @@ async def check_membership(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> 
         return False
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """স্টার্ট কমান্ড এবং চ্যানেল সাবস্ক্রিপশন চেক করে।"""
     user = update.effective_user
     user_id = user.id
     
-    # ডাটাবেজে ইউজার এন্ট্রি
     get_or_create_user(user_id)
-    
-    # চ্যানেল সাবস্ক্রিপশন যাচাই
     is_joined = await check_membership(user_id, context)
     
     if not is_joined:
@@ -52,7 +62,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # মূল ওয়েলকাম বোতাম
     keyboard = [
         [InlineKeyboardButton("📊 Open Web App Dashboard", callback_data="open_webapp")],
         [InlineKeyboardButton("⚙️ Settings & PIN", callback_data="settings")]
@@ -68,7 +77,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ইনলাইন বাটনের রেসপন্স হ্যান্ডল করে।"""
     query = update.callback_query
     await query.answer()
     
@@ -87,8 +95,10 @@ def main():
         print("Error: BOT_TOKEN environment variable is missing!")
         return
         
-    app = Application.builder().token(BOT_TOKEN).build()
+    # ডামি সার্ভার থ্রেড চালু করা
+    Thread(target=run_health_server, daemon=True).start()
     
+    app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
     
@@ -97,4 +107,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-              
