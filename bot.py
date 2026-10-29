@@ -16,7 +16,6 @@ from telegram.ext import (
 from dotenv import load_dotenv
 from database import get_or_create_user, supabase
 
-# Load environment variables
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 REQUIRED_CHANNEL = os.getenv("REQUIRED_CHANNEL", "@IronsMind")
@@ -24,11 +23,9 @@ WEBAPP_URL = os.getenv("WEBAPP_URL", "https://irons-mind-bot.onrender.com")
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-# Conversation States
 HABIT_NAME, QUIT_DATE = range(2)
 RESET_REASON = 10
 
-# --- Health Check Server for Render ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -40,16 +37,15 @@ def run_health_server():
     server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
     server.serve_forever()
 
-# --- Helpers & Keyboards ---
 def get_reply_keyboard():
     keyboard = [
         [KeyboardButton("📊 Dashboard"), KeyboardButton("➕ New Habit Goal")],
         [KeyboardButton("📜 Reset History"), KeyboardButton("🔥 Streaks & Trophies")],
-        [KeyboardButton("💰 Savings Tracker"), KeyboardButton("⚙️ Settings")]
+        [KeyboardButton("💰 Savings Tracker"), KeyboardButton("⚙️ Settings & PIN")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-MENU_REGEX = "^(📊 Dashboard|➕ New Habit Goal|📜 Reset History|🔥 Streaks & Trophies|💰 Savings Tracker|⚙️ Settings)$"
+MENU_REGEX = "^(📊 Dashboard|➕ New Habit Goal|📜 Reset History|🔥 Streaks & Trophies|💰 Savings Tracker|⚙️ Settings & PIN)$"
 
 def parse_user_date(text: str):
     text_clean = text.strip().lower()
@@ -79,14 +75,14 @@ def get_habit(user_id):
         logging.error(f"DB Read Error: {e}")
         return None
 
-# --- Feature Modules ---
+# --- Main Feature Functions ---
 async def show_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     habit = get_habit(user_id)
     
     if not habit:
         await update.message.reply_text(
-            "⚠️ **No active habit found!**\n\nPlease tap '➕ New Habit Goal' to set up your tracker first.",
+            "⚠️ **কোনো তথ্য নেই!**\n\nআপনি এখনো কোনো হ্যাবিট সেটআপ করেননি। '➕ New Habit Goal' বাটনে চাপ দিয়ে শুরু করুন।",
             reply_markup=get_reply_keyboard(), parse_mode="Markdown"
         )
         return
@@ -110,7 +106,7 @@ async def show_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📊 **IRON MIND DASHBOARD**\n\n"
         f"🎯 **Goal:** Quitting {habit_name}\n"
         f"📅 **Started:** {start_time.strftime('%Y-%m-%d')}\n"
-        f"⏱️ **Abstinence Time:** {days}d, {hours}h, {minutes}m\n\n"
+        f"⏱️ **Abstinence Time:** {days} Days, {hours} Hours, {minutes} Mins\n\n"
         f"Every second counts! 💪"
     )
     
@@ -119,72 +115,94 @@ async def show_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🔄 Reset Timer", callback_data="prompt_reset")]
     ])
     
-    if update.callback_query:
-        await update.callback_query.message.reply_text(msg, reply_markup=kb, parse_mode="Markdown")
+    await update.message.reply_text(msg, reply_markup=kb, parse_mode="Markdown")
+
+async def show_reset_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    habit = get_habit(user_id)
+    
+    if not habit:
+        await update.message.reply_text("⚠️ **কোনো তথ্য নেই!**\n\nআগে একটি হ্যাবিট গোল সেটআপ করুন।", reply_markup=get_reply_keyboard())
+        return
+
+    history = habit.get("reset_history", [])
+    if history and len(history) > 0:
+        msg = "📜 **YOUR RESET HISTORY:**\n\n"
+        for idx, item in enumerate(history[-5:], 1):
+            dt_str = item.get("date", "")[:10]
+            rsn = item.get("reason", "No reason provided")
+            msg += f"{idx}. **{dt_str}** - {rsn}\n"
+        await update.message.reply_text(msg, reply_markup=get_reply_keyboard(), parse_mode="Markdown")
     else:
-        await update.message.reply_text(msg, reply_markup=kb, parse_mode="Markdown")
+        await update.message.reply_text("📜 **Reset History:** কোনো রিসেট হিস্ট্রি নেই! আপনার স্ট্রিক অক্ষুণ্ন রয়েছে। 🔥", reply_markup=get_reply_keyboard())
+
+async def show_streaks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    habit = get_habit(user_id)
+    
+    if not habit:
+        await update.message.reply_text("⚠️ **কোনো তথ্য নেই!**\n\nআগে একটি হ্যাবিট গোল সেটআপ করুন।", reply_markup=get_reply_keyboard())
+        return
+
+    start_time = datetime.fromisoformat(habit.get("created_at").replace("Z", "+00:00"))
+    days = max(0, (datetime.now(timezone.utc) - start_time).days)
+    msg = (
+        f"🏆 **TROPHIES & MILESTONES (Streak: {days} Days)**\n\n"
+        f"🛡️ **24 Hours Shield:** {'Achieved ✅' if days >= 1 else 'Locked 🔒'}\n"
+        f"🛡️ **3 Days Shield:** {'Achieved ✅' if days >= 3 else 'Locked 🔒'}\n"
+        f"🛡️ **1 Week Shield:** {'Achieved ✅' if days >= 7 else 'Locked 🔒'}\n"
+        f"🛡️ **1 Month Shield:** {'Achieved ✅' if days >= 30 else 'Locked 🔒'}"
+    )
+    await update.message.reply_text(msg, reply_markup=get_reply_keyboard(), parse_mode="Markdown")
+
+async def show_savings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    habit = get_habit(user_id)
+    
+    if not habit:
+        await update.message.reply_text("⚠️ **কোনো তথ্য নেই!**\n\nআগে একটি হ্যাবিট গোল সেটআপ করুন।", reply_markup=get_reply_keyboard())
+        return
+
+    start_time = datetime.fromisoformat(habit.get("created_at").replace("Z", "+00:00"))
+    days = max(0, (datetime.now(timezone.utc) - start_time).days)
+    msg = (
+        f"💰 **SAVINGS CALCULATOR**\n\n"
+        f"💵 **Estimated Money Saved:** ৳{days * 100}\n"
+        f"⏳ **Estimated Time Saved:** {days * 2} Hours\n\n"
+        f"স্ট্রিক ধরে রাখুন এবং আরও সাশ্রয় করুন!"
+    )
+    await update.message.reply_text(msg, reply_markup=get_reply_keyboard(), parse_mode="Markdown")
+
+async def show_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    pin = context.user_data.get("user_pin")
+    if pin:
+        msg = f"⚙️ **SETTINGS & SECURITY**\n\n🔒 **PIN Status:** Active (`{pin}`)\n\nপিন পরিবর্তন করতে নতুন ৪ ডিজিটের নম্বর পাঠান।"
+    else:
+        msg = "⚙️ **SETTINGS & SECURITY**\n\n🔒 **PIN Status:** কোনো পিন সেট করা নেই!\n\nসুরক্ষার জন্য আপনার অ্যাকাউন্টে ৪ ডিজিটের পিন সেট করতে এখানে নম্বর পাঠান।"
+
+    await update.message.reply_text(msg, reply_markup=get_reply_keyboard(), parse_mode="Markdown")
 
 async def handle_menu_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    user_id = update.effective_user.id
 
     if text == "📊 Dashboard":
         await show_dashboard(update, context)
-
     elif text == "📜 Reset History":
-        habit = get_habit(user_id)
-        if habit and habit.get("reset_history"):
-            history = habit.get("reset_history")
-            msg = "📜 **YOUR RESET HISTORY:**\n\n"
-            for idx, item in enumerate(history[-5:], 1):
-                dt_str = item.get("date", "")[:10]
-                rsn = item.get("reason", "No reason provided")
-                msg += f"{idx}. **{dt_str}** - {rsn}\n"
-            await update.message.reply_text(msg, reply_markup=get_reply_keyboard(), parse_mode="Markdown")
-        else:
-            await update.message.reply_text("📜 **Reset History:** No resets logged. You are on a perfect streak! 🔥", reply_markup=get_reply_keyboard())
-
+        await show_reset_history(update, context)
     elif text == "🔥 Streaks & Trophies":
-        habit = get_habit(user_id)
-        if habit:
-            start_time = datetime.fromisoformat(habit.get("created_at").replace("Z", "+00:00"))
-            days = max(0, (datetime.now(timezone.utc) - start_time).days)
-            msg = (
-                f"🏆 **TROPHIES & MILESTONES (Current: {days} Days)**\n\n"
-                f"🛡️ **24 Hours Shield:** {'Achieved ✅' if days >= 1 else 'Locked 🔒'}\n"
-                f"🛡️ **3 Days Shield:** {'Achieved ✅' if days >= 3 else 'Locked 🔒'}\n"
-                f"🛡️ **1 Week Shield:** {'Achieved ✅' if days >= 7 else 'Locked 🔒'}\n"
-                f"🛡️ **1 Month Shield:** {'Achieved ✅' if days >= 30 else 'Locked 🔒'}"
-            )
-            await update.message.reply_text(msg, reply_markup=get_reply_keyboard(), parse_mode="Markdown")
-        else:
-            await update.message.reply_text("⚠️ Setup a habit first to see trophies.", reply_markup=get_reply_keyboard())
-
+        await show_streaks(update, context)
     elif text == "💰 Savings Tracker":
-        habit = get_habit(user_id)
-        if habit:
-            start_time = datetime.fromisoformat(habit.get("created_at").replace("Z", "+00:00"))
-            days = max(0, (datetime.now(timezone.utc) - start_time).days)
-            msg = (
-                f"💰 **SAVINGS CALCULATOR**\n\n"
-                f"💵 **Estimated Money Saved:** ৳{days * 100}\n"
-                f"⏳ **Estimated Time Saved:** {days * 2} Hours\n\n"
-                f"Keep up the streak to save more!"
-            )
-            await update.message.reply_text(msg, reply_markup=get_reply_keyboard(), parse_mode="Markdown")
-        else:
-            await update.message.reply_text("⚠️ Setup a habit first to see savings.", reply_markup=get_reply_keyboard())
-
-    elif text == "⚙️ Settings":
-        await update.message.reply_text("⚙️ **Settings & Security:** Feature active.", reply_markup=get_reply_keyboard())
+        await show_savings(update, context)
+    elif text == "⚙️ Settings & PIN":
+        await show_settings(update, context)
     
     return ConversationHandler.END
 
-# --- Onboarding Conversation (New Habit) ---
+# --- Onboarding Flows ---
 async def start_new_habit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🎯 **Step 1:** What is the name of the habit or addiction you want to quit?\n"
-        "*(Example: Smoking, Social Media, Sugar, Gambling)*",
+        "🎯 **Step 1:** যে অভ্যাসটি আপনি ছাড়তে চান তার নাম লিখুন:\n"
+        "*(যেমন: Smoking, Social Media, Sugar, Gambling)*",
         parse_mode="Markdown"
     )
     return HABIT_NAME
@@ -192,11 +210,11 @@ async def start_new_habit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def habit_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["new_habit_name"] = update.message.text.strip()
     await update.message.reply_text(
-        f"Got it! You want to quit **{context.user_data['new_habit_name']}**.\n\n"
-        f"👉 **Step 2:** When did you start your timer?\n\n"
-        f"• Type **'today'** if starting today.\n"
-        f"• Type **'5 days ago'** (or any number).\n"
-        f"• Or send Date: **YYYY-MM-DD** (e.g. `2026-10-15`)",
+        f"বুঝেছি! আপনি **{context.user_data['new_habit_name']}** ছাড়তে চান।\n\n"
+        f"👉 **Step 2:** আপনি কবে থেকে এটি ছেড়েছেন?\n\n"
+        f"• **'today'** লিখুন আজ থেকে শুরু করতে।\n"
+        f"• **'5 days ago'** লিখুন (বা যত দিন আগে ছাড়েন)।\n"
+        f"• অথবা তারিখ দিন: **YYYY-MM-DD** (যেমন: `2026-10-15`)",
         parse_mode="Markdown"
     )
     return QUIT_DATE
@@ -206,7 +224,7 @@ async def quit_date_received(update: Update, context: ContextTypes.DEFAULT_TYPE)
     dt = parse_user_date(text)
     
     if not dt:
-        await update.message.reply_text("❌ **Invalid format.** Please type 'today', '5 days ago', or 'YYYY-MM-DD'.")
+        await update.message.reply_text("❌ **ভুল ফরম্যাট!** অনুগ্রহ করে 'today', '5 days ago', অথবা 'YYYY-MM-DD' ফরম্যাটে লিখুন।")
         return QUIT_DATE
 
     user_id = update.effective_user.id
@@ -222,23 +240,22 @@ async def quit_date_received(update: Update, context: ContextTypes.DEFAULT_TYPE)
         }).execute()
         
         await update.message.reply_text(
-            f"🎉 **Setup Complete!**\n\nQuitting: **{habit_name}**\nStarted: **{dt.strftime('%Y-%m-%d')}**\n\nTimer is live! 🔥",
+            f"🎉 **সেটআপ সফল হয়েছে!**\n\nলক্ষ্য: **Quitting {habit_name}**\nশুরুর তারিখ: **{dt.strftime('%Y-%m-%d')}**\n\nটাইমার লাইভ চালু হয়েছে! 🔥",
             reply_markup=get_reply_keyboard(), parse_mode="Markdown"
         )
     except Exception as e:
         logging.error(f"DB Error: {e}")
-        await update.message.reply_text("❌ Database error occurred.", reply_markup=get_reply_keyboard())
+        await update.message.reply_text("❌ ডাটাবেজে সেভ হতে সমস্যা হয়েছে।", reply_markup=get_reply_keyboard())
         
     return ConversationHandler.END
 
-# --- Reset Conversation ---
 async def prompt_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await query.message.reply_text(
-        "⚠️ **You are about to Reset your Timer!**\n\n"
-        "Please type and send the **reason** why you relapsed or broke the streak.\n"
-        "*(This helps you analyze triggers later in Reset History)*",
+        "⚠️ **টাইমার রিসেট করতে চাচ্ছেন!**\n\n"
+        "কেন আপনার স্ট্রিক ভেঙ্গে গেল তার **কারণ** সংক্ষেপে লিখে পাঠান।\n"
+        "*(এটি আপনার Reset History-তে সেভ থাকবে)*",
         parse_mode="Markdown"
     )
     return RESET_REASON
@@ -260,27 +277,26 @@ async def execute_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }).eq("user_id", user_id).execute()
             
             await update.message.reply_text(
-                f"🔄 **Timer Reset Successful!**\n\nReason: *\"{reason}\"*\nDon't give up! A new streak begins right now. 💪",
+                f"🔄 **টাইমার সফলভাবে রিসেট হয়েছে!**\n\nকারণ: *\"{reason}\"*\nআবার নতুন স্ট্রিক শুরু করুন! 💪",
                 reply_markup=get_reply_keyboard(), parse_mode="Markdown"
             )
         except Exception as e:
             logging.error(f"Reset DB Error: {e}")
-            await update.message.reply_text("❌ Failed to save reset.", reply_markup=get_reply_keyboard())
+            await update.message.reply_text("❌ সেভ হতে সমস্যা হয়েছে।", reply_markup=get_reply_keyboard())
     else:
-        await update.message.reply_text("⚠️ No habit found to reset.", reply_markup=get_reply_keyboard())
+        await update.message.reply_text("⚠️ রিসেট করার জন্য কোনো অভ্যাস পাওয়া যায়নি।", reply_markup=get_reply_keyboard())
         
     return ConversationHandler.END
 
-# --- Start & Core Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     get_or_create_user(user_id)
     
-    commands = [BotCommand("start", "Restart Bot"), BotCommand("help", "Get Support")]
+    commands = [BotCommand("start", "Restart Bot"), BotCommand("dashboard", "Open Dashboard")]
     await context.bot.set_my_commands(commands)
     
     await update.message.reply_text(
-        f"🛡️ **Welcome to Iron Mind!**\n\nUse the menu buttons below.",
+        f"🛡️ **Welcome to Iron Mind!**\n\nনিচের মেনু বাটনগুলো ব্যবহার করুন।",
         reply_markup=get_reply_keyboard(), parse_mode="Markdown"
     )
 
@@ -290,9 +306,8 @@ def main():
     
     app = Application.builder().token(BOT_TOKEN).build()
     
-    # 1. Onboarding Conversation
     onboarding_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^➕ New Habit Goal$"), start_new_habit)],
+        entry_points=[MessageHandler(filters.Regex("^➕ New Habit Goal$"), start_onboarding)],
         states={
             HABIT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(MENU_REGEX), habit_name_received)],
             QUIT_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(MENU_REGEX), quit_date_received)],
@@ -300,7 +315,6 @@ def main():
         fallbacks=[MessageHandler(filters.Regex(MENU_REGEX), handle_menu_commands)],
     )
 
-    # 2. Reset Timer Conversation
     reset_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(prompt_reset, pattern="^prompt_reset$")],
         states={
@@ -310,13 +324,13 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("dashboard", show_dashboard))
     app.add_handler(onboarding_handler)
     app.add_handler(reset_handler)
     
-    # General Menu Handler for any button tap outside a conversation
     app.add_handler(MessageHandler(filters.Regex(MENU_REGEX), handle_menu_commands))
     
-    print("Iron Mind Bot is running flawlessly...")
+    print("Iron Mind Bot is running...")
     app.run_polling()
 
 if __name__ == "__main__":
