@@ -1,6 +1,6 @@
 import os
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, time
 from threading import Thread
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, BotCommand, WebAppInfo
@@ -76,6 +76,12 @@ def parse_date(text: str):
         except ValueError: continue
     return None
 
+def format_time_diff(diff: timedelta):
+    days = diff.days
+    hours, remainder = divmod(diff.seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return days, hours, minutes, seconds
+
 # --- Core Security Check ---
 async def check_lock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -92,6 +98,25 @@ async def check_lock(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return True
     return False
 
+# --- Daily Notification Job ---
+async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        users = supabase.table("habits").select("user_id, name, created_at").execute()
+        if not users.data: return
+        
+        now = datetime.now(timezone.utc)
+        for h in users.data:
+            user_id = h["user_id"]
+            st = datetime.fromisoformat(h["created_at"].replace("Z", "+00:00"))
+            days = (now - st).days
+            
+            msg = f"🌅 **শুভ সকাল!**\n\nআপনার **{h['name']}** ছাড়ার যাত্রায় আপনি **{days} দিন** পার করেছেন! আজকের দিনটিও সফলতার সাথে পার করুন। 💪"
+            try:
+                await context.bot.send_message(chat_id=user_id, text=msg, parse_mode="Markdown")
+            except: pass # User might have blocked the bot
+    except Exception as e:
+        logging.error(f"Reminder Error: {e}")
+
 # --- Command Functions ---
 async def cmd_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await check_lock(update, context): return
@@ -103,19 +128,33 @@ async def cmd_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not habit:
         msg = "⚠️ কোনো তথ্য নেই! '➕ নতুন লক্ষ্য' বাটন থেকে হ্যাবিট সেট করুন।" if lang=="bn" else "⚠️ No data! Tap '➕ New Habit Goal'."
-        await update.message.reply_text(msg, reply_markup=get_keyboard(lang))
+        if update.message: await update.message.reply_text(msg, reply_markup=get_keyboard(lang))
+        else: await update.callback_query.message.reply_text(msg, reply_markup=get_keyboard(lang))
         return
 
     st = datetime.fromisoformat(habit.get("created_at").replace("Z", "+00:00"))
     diff = max(timedelta(0), datetime.now(timezone.utc) - st)
+    days, hours, minutes, seconds = format_time_diff(diff)
     
     if lang == "bn":
-        msg = f"📊 **ড্যাশবোর্ড**\n\n🎯 **লক্ষ্য:** {habit.get('name')} ছাড়া\n📅 **শুরু:** {st.strftime('%Y-%m-%d')}\n⏱️ **সময় পার হয়েছে:** {diff.days} দিন, {diff.seconds//3600} ঘণ্টা, {(diff.seconds//60)%60} মিনিট\n\nএগিয়ে যান! 💪"
+        msg = f"📊 **ড্যাশবোর্ড**\n\n🎯 **লক্ষ্য:** {habit.get('name')} ছাড়া\n📅 **শুরু:** {st.strftime('%Y-%m-%d')}\n⏱️ **সময় পার হয়েছে:**\n`{days} দিন, {hours} ঘণ্টা, {minutes} মিনিট, {seconds} সেকেন্ড`\n\nএগিয়ে যান! 💪"
     else:
-        msg = f"📊 **DASHBOARD**\n\n🎯 **Goal:** Quitting {habit.get('name')}\n📅 **Started:** {st.strftime('%Y-%m-%d')}\n⏱️ **Time:** {diff.days}d, {diff.seconds//3600}h, {(diff.seconds//60)%60}m\n\nKeep going! 💪"
+        msg = f"📊 **DASHBOARD**\n\n🎯 **Goal:** Quitting {habit.get('name')}\n📅 **Started:** {st.strftime('%Y-%m-%d')}\n⏱️ **Time Passed:**\n`{days}d, {hours}h, {minutes}m, {seconds}s`\n\nKeep going! 💪"
     
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🌐 Web Dashboard", web_app=WebAppInfo(url=WEBAPP_URL))], [InlineKeyboardButton("🔄 Reset Timer", callback_data="do_reset")]])
-    await update.message.reply_text(msg, reply_markup=kb, parse_mode="Markdown")
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Refresh / আপডেট", callback_data="refresh_dash")],
+        [InlineKeyboardButton("🌐 Web Dashboard", web_app=WebAppInfo(url=WEBAPP_URL))], 
+        [InlineKeyboardButton("⚠️ Reset Timer", callback_data="do_reset")]
+    ])
+    
+    if update.callback_query and update.callback_query.data == "refresh_dash":
+        try:
+            await update.callback_query.edit_message_text(msg, reply_markup=kb, parse_mode="Markdown")
+        except: pass # If same exact second, telegram throws error
+    elif update.message:
+        await update.message.reply_text(msg, reply_markup=kb, parse_mode="Markdown")
+    else:
+        await update.callback_query.message.reply_text(msg, reply_markup=kb, parse_mode="Markdown")
 
 async def cmd_new_habit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await check_lock(update, context): return
@@ -189,8 +228,28 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = None
         habit = get_habit(user_id)
         if not habit: return await update.message.reply_text("⚠️ ডাটা নেই!" if lang=="bn" else "⚠️ No data!")
-        d = max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(habit.get("created_at").replace("Z", "+00:00"))).days)
-        msg = f"🏆 **Trophies (Streak: {d} Days)**\n\n🛡️ **1 Day:** {'✅' if d>=1 else '🔒'}\n🛡️ **3 Days:** {'✅' if d>=3 else '🔒'}\n🛡️ **7 Days:** {'✅' if d>=7 else '🔒'}"
+        
+        st = datetime.fromisoformat(habit.get("created_at").replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        diff = max(timedelta(0), now - st)
+        passed_days = diff.days
+        
+        tiers = [1, 3, 7, 15, 30, 60, 90, 180, 365]
+        msg = f"🏆 **আপনার ট্রফি ও স্ট্রিক**\n\n"
+        
+        next_tier_found = False
+        for tier in tiers:
+            if passed_days >= tier:
+                msg += f"🛡️ **{tier} Days:** অর্জিত ✅\n"
+            else:
+                if not next_tier_found:
+                    target_date = st + timedelta(days=tier)
+                    rem = max(timedelta(0), target_date - now)
+                    rem_days, rem_h, rem_m, rem_s = format_time_diff(rem)
+                    msg += f"\n🎯 **পরবর্তী লক্ষ্য: {tier} Days**\n⏳ **বাকি আছে:** `{rem_days} দিন, {rem_h} ঘণ্টা, {rem_m} মিনিট, {rem_s} সেকেন্ড`\n\n"
+                    next_tier_found = True
+                msg += f"🔒 **{tier} Days:** লক করা\n"
+
         await update.message.reply_text(msg, parse_mode="Markdown")
         return
 
@@ -272,12 +331,15 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
     user_id = query.from_user.id
-    await query.answer()
+    
+    if data != "refresh_dash": await query.answer()
 
     if "profile" not in context.user_data: context.user_data["profile"] = get_or_create_profile(user_id)
     lang = context.user_data["profile"].get("lang", "bn")
     
-    if data == "lang_en":
+    if data == "refresh_dash":
+        await cmd_dashboard(update, context)
+    elif data == "lang_en":
         update_user_db(user_id, {"lang": "en"})
         context.user_data["profile"]["lang"] = "en"
         await query.message.reply_text("✅ Language changed to English.", reply_markup=get_keyboard("en"))
@@ -296,7 +358,6 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = "WAITING_RESET_REASON"
         await query.message.reply_text("⚠️ রিসেট করার কারণটি লিখে পাঠান:" if lang=="bn" else "⚠️ Enter reason for reset:")
 
-# --- Register Bot ---
 async def post_init(application: Application):
     commands = [
         BotCommand("start", "Start Bot"), 
@@ -309,17 +370,22 @@ async def post_init(application: Application):
 def main():
     if not BOT_TOKEN: return
     Thread(target=run_health_server, daemon=True).start()
+    
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    
+    # Schedule Daily Reminder at 09:00 AM UTC
+    if app.job_queue:
+        app.job_queue.run_daily(send_daily_reminder, time=time(hour=9, minute=0, tzinfo=timezone.utc))
     
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("dashboard", cmd_dashboard))
     app.add_handler(CommandHandler("new", cmd_new_habit))
-    app.add_handler(CommandHandler("help", cmd_help)) # HELP COMMAND FIXED
+    app.add_handler(CommandHandler("help", cmd_help)) 
     
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(handle_callbacks))
     
-    print("Iron Mind Bot is running...")
+    print("Iron Mind Bot is running with Advanced Features...")
     app.run_polling()
 
 if __name__ == "__main__":
