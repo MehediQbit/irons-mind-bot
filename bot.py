@@ -131,7 +131,8 @@ async def cmd_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         diff = max(timedelta(0), now - st)
         days, hours, minutes, seconds = format_time_diff(diff)
         
-        msg += f"🎯 **লক্ষ্য:** {h['name']} \n📅 **শুরু:** {st.strftime('%Y-%m-%d')}\n⏱️ **সময়:** `{days} দিন, {hours} ঘণ্টা, {minutes} মিনিট`\n\n"
+        # Second added here!
+        msg += f"🎯 **লক্ষ্য:** {h['name']} \n📅 **শুরু:** {st.strftime('%Y-%m-%d')}\n⏱️ **সময়:** `{days} দিন, {hours} ঘণ্টা, {minutes} মিনিট, {seconds} সেকেন্ড`\n\n"
         kb.append([
             InlineKeyboardButton(f"🔄 Reset ({h['name']})", callback_data=f"reset_{h['id']}"),
             InlineKeyboardButton(f"🗑️ Delete", callback_data=f"remove_{h['id']}")
@@ -232,7 +233,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if not next_tier_found:
                         rem = max(timedelta(0), (st + timedelta(days=tier)) - now)
                         rd, rh, rm, rs = format_time_diff(rem)
-                        msg += f"\n🎯 **পরবর্তী লক্ষ্য: {tier} Days**\n⏳ **বাকি:** `{rd}দিন, {rh}ঘণ্টা, {rm}মিনিট`\n\n"
+                        # Second added here too!
+                        msg += f"\n🎯 **পরবর্তী লক্ষ্য: {tier} Days**\n⏳ **বাকি:** `{rd}দিন, {rh}ঘণ্টা, {rm}মিনিট, {rs}সেকেন্ড`\n\n"
                         next_tier_found = True
         await update.message.reply_text(msg, parse_mode="Markdown")
         return
@@ -308,7 +310,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except: time_val = 0.0
         
         try:
-            # Note: Removed delete(), so users can add multiple habits!
             supabase.table("habits").insert({
                 "user_id": user_id, 
                 "name": context.user_data["temp_name"], 
@@ -385,6 +386,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if data != "refresh_dash": await query.answer()
     if "profile" not in context.user_data: context.user_data["profile"] = get_or_create_profile(user_id)
+    lang = context.user_data["profile"].get("lang", "bn")
     
     if data == "refresh_dash":
         await cmd_dashboard(update, context)
@@ -433,7 +435,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(handle_callbacks))
     
-    print("Iron Mind Bot is running (Multi-Habit Version)...")
+    print("Iron Mind Bot is running (Multi-Habit Version with Seconds)...")
     app.run_polling()
 
 if __name__ == "__main__":
