@@ -133,6 +133,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = context.user_data["profile"].get("lang", "bn")
     await update.message.reply_text("🛡️ **Iron Mind-এ স্বাগতম!**" if lang=="bn" else "🛡️ **Welcome to Iron Mind!**", reply_markup=get_keyboard(lang), parse_mode="Markdown")
 
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = context.user_data.get("profile", {}).get("lang", "bn")
+    msg = "❓ **সাহায্য ও সাপোর্ট:**\n\n• /dashboard : ড্যাশবোর্ড খুলতে।\n• /new : নতুন অভ্যাস সেট করতে।\n• পিন ভুলে গেলে লক স্ক্রিনে `reset` লিখুন।" if lang=="bn" else "❓ **Help & Support:**\n\n• /dashboard : Open Dashboard.\n• /new : Set new habit.\n• Forgot PIN? type `reset` on lock screen."
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
 # --- Message Handler ---
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
@@ -228,7 +233,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await cmd_dashboard(update, context)
         except Exception as e:
             logging.error(f"Save Error: {e}")
-            await update.message.reply_text("❌ ডাটাবেজ এরর!" if lang=="bn" else "❌ DB Error!")
+            err_msg = str(e).replace('"', "'")[:200]
+            await update.message.reply_text(f"❌ ডাটাবেজ এরর: `{err_msg}`\n\nআপনি কি Supabase-এ SQL কমান্ডটি রান করেছেন?")
 
     elif state == "WAITING_PIN":
         if len(text) >= 4 and text.isdigit():
@@ -290,25 +296,30 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = "WAITING_RESET_REASON"
         await query.message.reply_text("⚠️ রিসেট করার কারণটি লিখে পাঠান:" if lang=="bn" else "⚠️ Enter reason for reset:")
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logging.error(msg="Exception while handling an update:", exc_info=context.error)
+# --- Register Bot ---
+async def post_init(application: Application):
+    commands = [
+        BotCommand("start", "Start Bot"), 
+        BotCommand("dashboard", "Open Dashboard"), 
+        BotCommand("new", "Set New Habit"), 
+        BotCommand("help", "Help & Support")
+    ]
+    await application.bot.set_my_commands(commands)
 
 def main():
-    if not BOT_TOKEN:
-        print("ERROR: BOT_TOKEN not found!")
-        return
+    if not BOT_TOKEN: return
     Thread(target=run_health_server, daemon=True).start()
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("dashboard", cmd_dashboard))
     app.add_handler(CommandHandler("new", cmd_new_habit))
+    app.add_handler(CommandHandler("help", cmd_help)) # HELP COMMAND FIXED
     
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(handle_callbacks))
-    app.add_error_handler(error_handler)
     
-    print("Iron Mind Bot is running (Master Version)...")
+    print("Iron Mind Bot is running...")
     app.run_polling()
 
 if __name__ == "__main__":
